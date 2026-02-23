@@ -80,14 +80,18 @@ def draw_star(draw, center, size, color):
         ang += math.pi / 5
     draw.polygon(pts, fill=color)
 
+# --- UPDATED COLOR LOGIC ---
 def color_for_score(score):
     if score is None or (isinstance(score, float) and np.isnan(score)): return (54, 54, 54)
     s = float(score)
-    if s <= 5.5: return (128, 0, 128)
-    if s <= 6.9: return (220, 0, 0)
-    if s <= 7.9: return (212, 175, 55)
+    # 1. Garbage remains <= 5.5
+    if s <= 5.5: return (128, 0, 128) 
+    # 2. Removed the distinct "Bad" red category (<= 6.9)
+    # 3. "Good" now catches everything from 5.6 up to 7.9
+    if s <= 7.9: return (212, 175, 55) 
     if s <= 8.5: return (144, 238, 144)
     return (0, 100, 0)
+# ---------------------------
 
 def text_color_for_bg(rgb):
     r, g, b = rgb
@@ -138,7 +142,27 @@ def wrap_text_pixel(draw, text, font, max_w):
         lines.append(' '.join(current_line))
     return lines
 
-def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
+# --- BRIGHT 3D GOLDEN BORDER FUNCTION ---
+def draw_golden_3d_border(draw, bbox, border_width=4):
+    """Draws a bright 3D beveled golden border around a specific episode block."""
+    x0, y0, x1, y1 = bbox
+    
+    # 3D Bevel Colors (The Brighter Version)
+    bright_gold = "#FFD700"  # Top & Left (Highlight)
+    dark_gold = "#B8860B"    # Bottom & Right (Shadow)
+    inner_glow = "#FFFACD"   # 1px inner pop
+    
+    for i in range(border_width):
+        draw.line([(x0+i, y0+i), (x1-i, y0+i)], fill=bright_gold, width=1) # Top
+        draw.line([(x0+i, y0+i), (x0+i, y1-i)], fill=bright_gold, width=1) # Left
+        draw.line([(x0+i, y1-i), (x1-i, y1-i)], fill=dark_gold, width=1)   # Bottom
+        draw.line([(x1-i, y0+i), (x1-i, y1-i)], fill=dark_gold, width=1)   # Right
+
+    # 1px inner pop to make it crisp
+    inner_offset = border_width
+    draw.rectangle([x0 + inner_offset, y0 + inner_offset, x1 - inner_offset, y1 - inner_offset], outline=inner_glow, width=1)
+
+def render_page(grid_df, poster_img, title, year_range, summary, main_rating, num_votes=0):
     left_col_w = 600
     HEADER_Y = 90
     FIXED_BOX_W = 110
@@ -159,10 +183,12 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
     canvas = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
+    # --- FONT DEFINITIONS ---
     f_reg = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 20)
     title_font = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 72)
     font_year = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 28)
     font_rating = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 56)
+    font_votes = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 28) 
     box_font = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 22)
 
     if poster_img:
@@ -183,8 +209,20 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
     y += 10
     draw_text_rich(draw, (x_left, y), f"({year_range})", font_year, (245, 245, 245))
     y += 70
+    
+    # --- DRAW STAR, RATING, AND VOTES ---
     draw_star(draw, (x_left + 28, y + 25), 28, (255, 200, 0))
-    draw_text_rich(draw, (x_left + 70, y), f"{main_rating}/10", font_rating, (245, 245, 245))
+    rating_text = f"{main_rating}/10"
+    draw_text_rich(draw, (x_left + 70, y), rating_text, font_rating, (245, 245, 245))
+    
+    if pd.notna(num_votes) and num_votes != 0 and num_votes != "":
+        try:
+            votes_str = f"({int(num_votes):,})" 
+            rating_w = draw.textlength(rating_text, font=font_rating)
+            draw_text_rich(draw, (x_left + 70 + rating_w + 15, y + 22), votes_str, font_votes, (180, 180, 180))
+        except:
+            pass
+            
     y += 75
     wrapper = textwrap.TextWrapper(width=50)
     lines = wrapper.wrap(summary)[:8]
@@ -194,7 +232,11 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
 
     grid_start_x = x_left + left_col_w + GAP_BETWEEN_COLS
     seasons = list(grid_df.columns)
-    legend = [("Awesome", (0, 100, 0)), ("Great", (144, 238, 144)), ("Good", (212, 175, 55)), ("Bad", (220, 0, 0)), ("Garbage", (128, 0, 128))]
+    
+    # --- UPDATED LEGEND (Removed "Bad" category) ---
+    legend = [("Awesome", (0, 100, 0)), ("Great", (144, 238, 144)), ("Good", (212, 175, 55)), ("Garbage", (128, 0, 128))]
+    # -----------------------------------------------
+    
     lx = grid_start_x
     ly = HEADER_Y - 60
     for name, col in legend:
@@ -215,12 +257,19 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
         ebox = [grid_start_x - 66, ry, grid_start_x - 66 + 48, ry + FIXED_BOX_H]
         draw.rounded_rectangle(ebox, 6, (40, 40, 40))
         draw_text_rich(draw, (ebox[0] + 24, ebox[1] + FIXED_BOX_H / 2), f"E{ep}", f_reg, (245, 245, 245), anchor="mm")
+        
         for j, s in enumerate(seasons):
             sx = grid_start_x + j * (FIXED_BOX_W + 12)
             val = grid_df.loc[ep, s]
             box = [sx, ry, sx + FIXED_BOX_W, ry + FIXED_BOX_H]
+            
             fill = color_for_score(val)
             draw.rounded_rectangle(box, radius=10, fill=fill, outline=(12, 12, 12), width=2)
+            
+            if pd.notna(val) and val >= 9.5:
+                border_box = [box[0]+1, box[1]+1, box[2]-1, box[3]-1]
+                draw_golden_3d_border(draw, border_box)
+            
             txt = f"{val:.1f}" if pd.notna(val) else "-"
             tcol = text_color_for_bg(fill)
             draw_text_rich(draw, (sx + FIXED_BOX_W / 2, ry + FIXED_BOX_H / 2), txt, box_font, tcol, anchor="mm", shadow=None)
@@ -231,6 +280,7 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
     a = [grid_start_x - 66, avg_y, grid_start_x - 66 + 48, avg_y + FIXED_BOX_H]
     draw.rounded_rectangle(a, 8, (40, 40, 40))
     draw_text_rich(draw, (a[0] + 24, avg_y + FIXED_BOX_H / 2), "Avg", f_reg, (245, 245, 245), anchor="mm")
+    
     for j, s in enumerate(seasons):
         sx = grid_start_x + j * (FIXED_BOX_W + 12)
         vals = pd.to_numeric(grid_df[s], errors='coerce').dropna()
@@ -241,6 +291,7 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating):
         txt = f"{avg:.1f}" if avg is not None else "—"
         tcol = text_color_for_bg(fill)
         draw_text_rich(draw, (sx + 55, avg_y + FIXED_BOX_H / 2), txt, box_font, tcol, anchor="mm", shadow=None)
+    
     return canvas
 
 # ==========================================
@@ -256,7 +307,6 @@ def get_recommendations(current_tconst, genres):
     for g in current_genres:
         score_query.append(f"(CASE WHEN s.genres LIKE '%{g}%' THEN 1 ELSE 0 END)")
     total_score_sql = " + ".join(score_query)
-    # FIX: Added 's.genres' to SELECT to prevent KeyError crash
     sql = f"""
     SELECT s.tconst, s.primaryTitle, s.startYear, s.numVotes, s.genres, r.averageRating,
            ({total_score_sql}) as match_score
@@ -395,9 +445,6 @@ if not os.path.exists(DB_FILE):
 
 query = st.text_input("", placeholder="🔍 Search for a show (e.g. Arcane, Breaking Bad)...")
 
-# 1. CREATE A MAIN PLACEHOLDER FOR CONTENT (FIXES GHOSTING)
-main_display = st.empty()
-
 if query:
     results = search_shows(query)
     if results.empty:
@@ -408,12 +455,12 @@ if query:
         for i, (idx, row) in enumerate(results.iterrows()):
             with cols[i % 3]:
                 label = f"{row['primaryTitle']} ({row['startYear']})"
-                # 2. CLICKING A SEARCH RESULT UPDATES THE SESSION AND RERUNS
                 if st.button(label, key=f"btn_{row['tconst']}", use_container_width=True):
                     st.session_state['selected_show'] = row.to_dict()
                     st.rerun()
 
-# 3. IF A SHOW IS SELECTED, DISPLAY EVERYTHING INSIDE THE PLACEHOLDER
+main_display = st.empty()
+
 if 'selected_show' in st.session_state:
     with main_display.container():
         row = st.session_state['selected_show']
@@ -421,10 +468,8 @@ if 'selected_show' in st.session_state:
         
         st.divider()
         
-        # FETCH DATA
         poster_url, summary = get_metadata(target_id, quality="original")
         
-        # HERO LAYOUT
         hero_col1, hero_col2 = st.columns([1, 2])
         
         with hero_col1:
@@ -435,12 +480,10 @@ if 'selected_show' in st.session_state:
             
         with hero_col2:
             st.markdown(f"# {row['primaryTitle']}")
-            # SAFE GENRE DISPLAY
             genres = row.get('genres', 'Unknown')
             start_year = row.get('startYear', '????')
             st.markdown(f"#### {start_year} • {genres}")
             
-            # Action Buttons
             c1, c2 = st.columns(2)
             do_db = c1.button("⚡ Fast (DB)", key="act_db", use_container_width=True)
             do_live = c2.button("🌍 Live (Web)", key="act_live", use_container_width=True)
@@ -448,11 +491,9 @@ if 'selected_show' in st.session_state:
             use_live = False
             if do_live: use_live = True
             
-            # Summary Box
             if summary:
                 st.markdown(f"_{summary}_")
 
-        # GENERATE CHART
         if do_db or do_live or 'selected_show' in st.session_state:
             with st.spinner("Generating Heatmap..."):
                 grid, rating, src_msg = get_show_data(target_id, force_live=use_live)
@@ -467,15 +508,21 @@ if 'selected_show' in st.session_state:
                             poster_img = Image.open(BytesIO(resp.content)).convert("RGB")
                         except: pass
                     
-                    final_img = render_page(grid, poster_img, row['primaryTitle'], row.get('startYear', '????'), summary, rating)
+                    final_img = render_page(
+                        grid, 
+                        poster_img, 
+                        row['primaryTitle'], 
+                        row.get('startYear', '????'), 
+                        summary, 
+                        rating,
+                        row.get('numVotes', 0)
+                    )
                     st.image(final_img, use_container_width=True)
                     
-                    # Download
                     buf = BytesIO()
                     final_img.save(buf, format="PNG")
                     st.download_button("⬇️ Download High-Res Image", data=buf.getvalue(), file_name=f"{row['primaryTitle']}.png", mime="image/png", use_container_width=True)
                     
-                    # 4. RECOMMENDATIONS (CLICKABLE TITLE)
                     st.divider()
                     st.subheader("You might also like:")
                     
@@ -492,7 +539,6 @@ if 'selected_show' in st.session_state:
                                 
                                 st.caption(f"⭐ {rec_row['averageRating']}")
                                 
-                                # CLICKABLE TITLE BUTTON
                                 if st.button(f"▶ {rec_row['primaryTitle']}", key=f"rec_{rec_row['tconst']}", use_container_width=True):
                                     st.session_state['selected_show'] = rec_row.to_dict()
                                     st.rerun()
