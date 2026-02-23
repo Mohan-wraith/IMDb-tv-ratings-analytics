@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
+import streamlit.components.v1 as components
 
 # --- CONFIG ---
 DB_FILE = "tv_shows.db"
@@ -80,18 +81,16 @@ def draw_star(draw, center, size, color):
         ang += math.pi / 5
     draw.polygon(pts, fill=color)
 
-# --- UPDATED COLOR LOGIC ---
+# --- UPDATED THRESHOLDS: AWESOME IS NOW 9.0+ ---
 def color_for_score(score):
     if score is None or (isinstance(score, float) and np.isnan(score)): return (54, 54, 54)
     s = float(score)
-    # 1. Garbage remains <= 5.5
-    if s <= 5.5: return (128, 0, 128) 
-    # 2. Removed the distinct "Bad" red category (<= 6.9)
-    # 3. "Good" now catches everything from 5.6 up to 7.9
-    if s <= 7.9: return (212, 175, 55) 
-    if s <= 8.5: return (144, 238, 144)
-    return (0, 100, 0)
-# ---------------------------
+    if s < 5.0: return (128, 0, 128)      # Garbage: Below 5.0
+    if s < 6.0: return (220, 0, 0)        # Bad: 5.0 to 5.9
+    if s <= 7.9: return (212, 175, 55)    # Good: 6.0 to 7.9
+    if s < 9.0: return (144, 238, 144)    # Great: 8.0 to 8.9
+    return (0, 100, 0)                    # Awesome: 9.0+
+# -----------------------------------------------
 
 def text_color_for_bg(rgb):
     r, g, b = rgb
@@ -142,27 +141,23 @@ def wrap_text_pixel(draw, text, font, max_w):
         lines.append(' '.join(current_line))
     return lines
 
-# --- BRIGHT 3D GOLDEN BORDER FUNCTION ---
 def draw_golden_3d_border(draw, bbox, border_width=4):
-    """Draws a bright 3D beveled golden border around a specific episode block."""
     x0, y0, x1, y1 = bbox
-    
-    # 3D Bevel Colors (The Brighter Version)
-    bright_gold = "#FFD700"  # Top & Left (Highlight)
-    dark_gold = "#B8860B"    # Bottom & Right (Shadow)
-    inner_glow = "#FFFACD"   # 1px inner pop
+    bright_gold = "#FFD700"  
+    dark_gold = "#B8860B"    
+    inner_glow = "#FFFACD"   
     
     for i in range(border_width):
-        draw.line([(x0+i, y0+i), (x1-i, y0+i)], fill=bright_gold, width=1) # Top
-        draw.line([(x0+i, y0+i), (x0+i, y1-i)], fill=bright_gold, width=1) # Left
-        draw.line([(x0+i, y1-i), (x1-i, y1-i)], fill=dark_gold, width=1)   # Bottom
-        draw.line([(x1-i, y0+i), (x1-i, y1-i)], fill=dark_gold, width=1)   # Right
+        draw.line([(x0+i, y0+i), (x1-i, y0+i)], fill=bright_gold, width=1) 
+        draw.line([(x0+i, y0+i), (x0+i, y1-i)], fill=bright_gold, width=1) 
+        draw.line([(x0+i, y1-i), (x1-i, y1-i)], fill=dark_gold, width=1)   
+        draw.line([(x1-i, y0+i), (x1-i, y1-i)], fill=dark_gold, width=1)   
 
-    # 1px inner pop to make it crisp
     inner_offset = border_width
     draw.rectangle([x0 + inner_offset, y0 + inner_offset, x1 - inner_offset, y1 - inner_offset], outline=inner_glow, width=1)
 
-def render_page(grid_df, poster_img, title, year_range, summary, main_rating, num_votes=0):
+@st.cache_data(show_spinner=False)
+def render_page(grid_df, poster_bytes, title, year_range, summary, main_rating, num_votes=0):
     left_col_w = 600
     HEADER_Y = 90
     FIXED_BOX_W = 110
@@ -183,13 +178,18 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating, nu
     canvas = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    # --- FONT DEFINITIONS ---
     f_reg = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 20)
     title_font = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 72)
     font_year = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 28)
     font_rating = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 56)
     font_votes = load_font(["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"], 28) 
     box_font = load_font(["arialbd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"], 22)
+
+    poster_img = None
+    if poster_bytes:
+        try:
+            poster_img = Image.open(BytesIO(poster_bytes)).convert("RGB")
+        except: pass
 
     if poster_img:
         bg = cover_crop(poster_img, canvas_w, canvas_h)
@@ -210,7 +210,6 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating, nu
     draw_text_rich(draw, (x_left, y), f"({year_range})", font_year, (245, 245, 245))
     y += 70
     
-    # --- DRAW STAR, RATING, AND VOTES ---
     draw_star(draw, (x_left + 28, y + 25), 28, (255, 200, 0))
     rating_text = f"{main_rating}/10"
     draw_text_rich(draw, (x_left + 70, y), rating_text, font_rating, (245, 245, 245))
@@ -233,9 +232,7 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating, nu
     grid_start_x = x_left + left_col_w + GAP_BETWEEN_COLS
     seasons = list(grid_df.columns)
     
-    # --- UPDATED LEGEND (Removed "Bad" category) ---
-    legend = [("Awesome", (0, 100, 0)), ("Great", (144, 238, 144)), ("Good", (212, 175, 55)), ("Garbage", (128, 0, 128))]
-    # -----------------------------------------------
+    legend = [("Awesome", (0, 100, 0)), ("Great", (144, 238, 144)), ("Good", (212, 175, 55)), ("Bad", (220, 0, 0)), ("Garbage", (128, 0, 128))]
     
     lx = grid_start_x
     ly = HEADER_Y - 60
@@ -295,20 +292,43 @@ def render_page(grid_df, poster_img, title, year_range, summary, main_rating, nu
     return canvas
 
 # ==========================================
-# 🧠 BACKEND LOGIC
+# 🧠 BACKEND LOGIC (CACHED, NO SPINNERS)
 # ==========================================
 
+def format_year_string(row):
+    sy = row.get('startYear', 'Unknown')
+    ey = row.get('endYear', 'None')
+    
+    def clean(val):
+        if pd.isna(val) or str(val).strip().lower() in [r'\n', 'none', '', 'nan', 'null']: 
+            return None
+        try: 
+            return str(int(float(val))) 
+        except: 
+            return str(val).strip()
+        
+    sy_clean = clean(sy)
+    ey_clean = clean(ey)
+    
+    if not sy_clean: return "????"
+    if not ey_clean: return f"{sy_clean}-"
+    if sy_clean == ey_clean: return f"{sy_clean}" 
+    return f"{sy_clean}-{ey_clean}"
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_recommendations(current_tconst, genres):
     if not genres or genres == "Unknown": return pd.DataFrame()
     current_genres = genres.split(',')
     main_genre = current_genres[0]
     conn = sqlite3.connect(DB_FILE)
+    
     score_query = []
     for g in current_genres:
         score_query.append(f"(CASE WHEN s.genres LIKE '%{g}%' THEN 1 ELSE 0 END)")
     total_score_sql = " + ".join(score_query)
+    
     sql = f"""
-    SELECT s.tconst, s.primaryTitle, s.startYear, s.numVotes, s.genres, r.averageRating,
+    SELECT s.tconst, s.primaryTitle, s.startYear, s.endYear, s.numVotes, s.genres, r.averageRating,
            ({total_score_sql}) as match_score
     FROM shows s
     JOIN ratings r ON s.tconst = r.tconst
@@ -320,25 +340,45 @@ def get_recommendations(current_tconst, genres):
     try:
         df = pd.read_sql_query(sql, conn, params=params)
     except:
-        df = pd.DataFrame()
+        sql_fallback = f"""
+        SELECT s.tconst, s.primaryTitle, s.startYear, s.numVotes, s.genres, r.averageRating,
+               ({total_score_sql}) as match_score
+        FROM shows s
+        JOIN ratings r ON s.tconst = r.tconst
+        WHERE s.genres LIKE ? AND s.tconst != ?
+        ORDER BY match_score DESC, s.numVotes DESC
+        LIMIT 4
+        """
+        try:
+            df = pd.read_sql_query(sql_fallback, conn, params=params)
+        except:
+            df = pd.DataFrame()
     conn.close()
     return df
 
+@st.cache_data(show_spinner=False)
 def search_shows(query):
     conn = sqlite3.connect(DB_FILE)
     parts = query.split()
-    sql = "SELECT tconst, primaryTitle, startYear, numVotes, genres FROM shows WHERE "
+    
     conditions = []
     params = []
     for part in parts:
         conditions.append("primaryTitle LIKE ?")
         params.append(f"%{part}%")
-    sql += " AND ".join(conditions)
-    sql += " ORDER BY numVotes DESC LIMIT 15"
+        
+    where_clause = " AND ".join(conditions)
+    
+    sql = f"SELECT tconst, primaryTitle, startYear, endYear, numVotes, genres FROM shows WHERE {where_clause} ORDER BY numVotes DESC LIMIT 15"
+    
     try:
         df = pd.read_sql_query(sql, conn, params=params)
     except:
-        df = pd.DataFrame()
+        sql_fallback = f"SELECT tconst, primaryTitle, startYear, numVotes, genres FROM shows WHERE {where_clause} ORDER BY numVotes DESC LIMIT 15"
+        try:
+            df = pd.read_sql_query(sql_fallback, conn, params=params)
+        except:
+            df = pd.DataFrame()
     conn.close()
     return df
 
@@ -393,6 +433,7 @@ def get_live_overall_rating(tconst):
     except: return None
     return None
 
+@st.cache_data(show_spinner=False)
 def get_show_data(tconst, force_live=False):
     conn = sqlite3.connect(DB_FILE)
     source_msg = "Database"
@@ -421,18 +462,48 @@ def get_show_data(tconst, force_live=False):
     if main_rating == 0.0 and not df.empty: main_rating = round(df['averageRating'].mean(), 1)
     return grid, main_rating, source_msg
 
+@st.cache_data(show_spinner=False)
 def get_metadata(imdb_id, quality="medium"):
     poster_url = None
     summary = ""
     try:
         url = f"https://api.tvmaze.com/lookup/shows?imdb={imdb_id}"
-        r = requests.get(url, timeout=2) 
+        r = requests.get(url, timeout=3) 
         if r.status_code == 200:
             d = r.json()
-            poster_url = d.get("image", {}).get(quality) 
+            img_data = d.get("image")
+            if img_data:
+                poster_url = img_data.get(quality) or img_data.get("original")
             summary = strip_html(d.get("summary", ""))
-    except: pass
+    except: 
+        pass
+
+    if not poster_url or not summary:
+        try:
+            ua = UserAgent()
+            headers = {"User-Agent": ua.chrome}
+            imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
+            r2 = requests.get(imdb_url, headers=headers, timeout=5)
+            
+            if r2.status_code == 200:
+                soup = BeautifulSoup(r2.content, 'html.parser')
+                if not poster_url:
+                    meta_img = soup.find('meta', property='og:image')
+                    if meta_img: poster_url = meta_img['content']
+                if not summary:
+                    meta_desc = soup.find('meta', property='og:description')
+                    if meta_desc: summary = strip_html(meta_desc['content'])
+        except: pass
+            
     return poster_url, summary
+
+@st.cache_data(show_spinner=False)
+def fetch_image_bytes(url):
+    try:
+        resp = requests.get(url, timeout=5)
+        return resp.content
+    except:
+        return None
 
 # ==========================================
 # 🚀 PRO INTERFACE
@@ -454,15 +525,33 @@ if query:
         cols = st.columns(3)
         for i, (idx, row) in enumerate(results.iterrows()):
             with cols[i % 3]:
-                label = f"{row['primaryTitle']} ({row['startYear']})"
+                yr_str = format_year_string(row)
+                label = f"{row['primaryTitle']} ({yr_str})"
                 if st.button(label, key=f"btn_{row['tconst']}", use_container_width=True):
-                    st.session_state['selected_show'] = row.to_dict()
+                    row_dict = row.to_dict()
+                    row_dict['formatted_year'] = yr_str 
+                    st.session_state['selected_show'] = row_dict
                     st.rerun()
 
 main_display = st.empty()
 
 if 'selected_show' in st.session_state:
     with main_display.container():
+        
+        components.html(
+            """
+            <script>
+                setTimeout(function() {
+                    window.parent.document.querySelector('.main').scrollTo({
+                        top: 0, 
+                        behavior: 'auto'
+                    });
+                }, 50); 
+            </script>
+            """,
+            height=0
+        )
+
         row = st.session_state['selected_show']
         target_id = row['tconst']
         
@@ -481,8 +570,9 @@ if 'selected_show' in st.session_state:
         with hero_col2:
             st.markdown(f"# {row['primaryTitle']}")
             genres = row.get('genres', 'Unknown')
-            start_year = row.get('startYear', '????')
-            st.markdown(f"#### {start_year} • {genres}")
+            
+            yr_str = row.get('formatted_year', format_year_string(row))
+            st.markdown(f"#### {yr_str} • {genres}")
             
             c1, c2 = st.columns(2)
             do_db = c1.button("⚡ Fast (DB)", key="act_db", use_container_width=True)
@@ -501,18 +591,15 @@ if 'selected_show' in st.session_state:
                     if "Live" in src_msg: st.success(f"✅ Data Source: {src_msg}")
                     else: st.caption(f"ℹ️ Data Source: {src_msg}")
                     
-                    poster_img = None
+                    img_bytes = None
                     if poster_url:
-                        try:
-                            resp = requests.get(poster_url)
-                            poster_img = Image.open(BytesIO(resp.content)).convert("RGB")
-                        except: pass
+                        img_bytes = fetch_image_bytes(poster_url)
                     
                     final_img = render_page(
                         grid, 
-                        poster_img, 
+                        img_bytes, 
                         row['primaryTitle'], 
-                        row.get('startYear', '????'), 
+                        yr_str,  
                         summary, 
                         rating,
                         row.get('numVotes', 0)
@@ -533,12 +620,14 @@ if 'selected_show' in st.session_state:
                         rcols = st.columns(4)
                         for idx, rec_row in rec_df.iterrows():
                             with rcols[idx]:
-                                rec_poster, _ = get_metadata(rec_row['tconst'], quality="medium")
-                                if rec_poster: st.image(rec_poster, use_container_width=True)
+                                rec_poster_url, _ = get_metadata(rec_row['tconst'], quality="medium")
+                                if rec_poster_url: st.image(rec_poster_url, use_container_width=True)
                                 else: st.markdown("📺 *No Poster*")
                                 
                                 st.caption(f"⭐ {rec_row['averageRating']}")
                                 
                                 if st.button(f"▶ {rec_row['primaryTitle']}", key=f"rec_{rec_row['tconst']}", use_container_width=True):
-                                    st.session_state['selected_show'] = rec_row.to_dict()
+                                    rec_row_dict = rec_row.to_dict()
+                                    rec_row_dict['formatted_year'] = format_year_string(rec_row)
+                                    st.session_state['selected_show'] = rec_row_dict
                                     st.rerun()
